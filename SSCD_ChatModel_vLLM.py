@@ -69,7 +69,7 @@ print(f"Client URL: {invoke_url}")
 
 # COMMAND ----------
 
-from mlflow.types.llm import ChatResponse, ChatChoice, ChatChoiceMessage
+from mlflow.types.llm import ChatResponse, ChatChoice, ChatMessage
 
 class VLLMChatModel(mlflow.pyfunc.ChatModel):
     _PORT       = 8000
@@ -147,7 +147,7 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
         return ChatResponse(
             choices=[ChatChoice(
                 index=0,
-                message=ChatChoiceMessage(
+                message=ChatMessage(
                     role=raw_msg["role"],
                     content=raw_msg.get("content"),
                     tool_calls=raw_msg.get("tool_calls"),
