@@ -74,43 +74,58 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
     _MODEL_NAME = "Qwen2.5-3B-Instruct"
 
     def load_context(self, context):
-        import subprocess, time
+        import subprocess, threading, time
         import requests as _req
 
-        model_dir = context.artifacts["model_dir"]
+        model_dir    = context.artifacts["model_dir"]
+        self._ready  = False
+        self._failed = False
 
-        self._proc = subprocess.Popen(
-            [
-                "python", "-m", "vllm.entrypoints.openai.api_server",
-                "--model",                  model_dir,
-                "--served-model-name",      self._MODEL_NAME,
-                "--host",                   "0.0.0.0",
-                "--port",                   str(self._PORT),
-                "--enable-auto-tool-choice",
-                "--tool-call-parser",       "hermes",
-                "--dtype",                  "half",
-                "--gpu-memory-utilization", "0.90",
-                "--max-num-seqs",           "32",
-                "--trust-remote-code",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        def _start():
+            self._proc = subprocess.Popen(
+                [
+                    "python", "-m", "vllm.entrypoints.openai.api_server",
+                    "--model",                  model_dir,
+                    "--served-model-name",      self._MODEL_NAME,
+                    "--host",                   "0.0.0.0",
+                    "--port",                   str(self._PORT),
+                    "--enable-auto-tool-choice",
+                    "--tool-call-parser",       "hermes",
+                    "--dtype",                  "half",
+                    "--gpu-memory-utilization", "0.90",
+                    "--max-num-seqs",           "32",
+                    "--trust-remote-code",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            for _ in range(60):
+                try:
+                    r = _req.get(f"http://localhost:{self._PORT}/health", timeout=5)
+                    if r.status_code == 200:
+                        self._ready = True
+                        return
+                except Exception:
+                    pass
+                time.sleep(10)
+            self._failed = True
 
-        for _ in range(60):
-            try:
-                r = _req.get(f"http://localhost:{self._PORT}/health", timeout=5)
-                if r.status_code == 200:
-                    return
-            except Exception:
-                pass
-            time.sleep(10)
-
-        self._proc.kill()
-        raise RuntimeError("vLLM server failed to start within 10 minutes.")
+        # Start vllm in background — load_context returns immediately so the
+        # container initialises fast. predict() waits for _ready before serving.
+        threading.Thread(target=_start, daemon=True).start()
 
     def predict(self, context, messages, params):
-        import requests as _req
+        import time, requests as _req
+
+        # Wait for vllm serve to be ready (first request only)
+        for _ in range(60):
+            if self._ready:
+                break
+            if self._failed:
+                raise RuntimeError("vLLM server failed to start.")
+            time.sleep(5)
+        else:
+            raise RuntimeError("Timed out waiting for vLLM server.")
 
         msgs = []
         for m in messages:
