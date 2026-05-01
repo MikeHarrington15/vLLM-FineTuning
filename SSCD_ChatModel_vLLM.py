@@ -74,22 +74,18 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
     _MODEL_NAME = "Qwen2.5-3B-Instruct"
 
     def load_context(self, context):
-        import subprocess, threading, time
+        import subprocess, time, os as _os
         import requests as _req
 
-        model_dir    = context.artifacts["model_dir"]
-        self._ready  = False
-        self._failed = False
+        model_dir = context.artifacts["model_dir"]
 
-        # Detect GPU using device files (reliable on Linux regardless of torch state).
-        # Falls back to nvidia-smi then torch. On CPU-only registration clusters this
-        # returns False and we skip starting vllm so MLflow validation completes fast.
-        import os as _os, subprocess as _sp
         def _has_gpu():
             if _os.path.exists('/dev/nvidiactl'):
                 return True
             try:
-                return _sp.run(['nvidia-smi'], capture_output=True, timeout=5).returncode == 0
+                return subprocess.run(
+                    ['nvidia-smi'], capture_output=True, timeout=5
+                ).returncode == 0
             except Exception:
                 pass
             try:
@@ -105,41 +101,38 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
 
         self._skip_serve = False
 
-        def _start():
-            self._proc = subprocess.Popen(
-                [
-                    "python", "-m", "vllm.entrypoints.openai.api_server",
-                    "--model",                  model_dir,
-                    "--served-model-name",      self._MODEL_NAME,
-                    "--host",                   "0.0.0.0",
-                    "--port",                   str(self._PORT),
-                    "--enable-auto-tool-choice",
-                    "--tool-call-parser",       "qwen25",
-                    "--dtype",                  "half",
-                    "--gpu-memory-utilization", "0.90",
-                    "--max-num-seqs",           "32",
-                    "--trust-remote-code",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-            for _ in range(60):
-                try:
-                    r = _req.get(f"http://localhost:{self._PORT}/health", timeout=5)
-                    if r.status_code == 200:
-                        self._ready = True
-                        return
-                except Exception:
-                    pass
-                time.sleep(10)
-            self._failed = True
+        self._proc = subprocess.Popen(
+            [
+                "python", "-m", "vllm.entrypoints.openai.api_server",
+                "--model",                  model_dir,
+                "--served-model-name",      self._MODEL_NAME,
+                "--host",                   "0.0.0.0",
+                "--port",                   str(self._PORT),
+                "--enable-auto-tool-choice",
+                "--tool-call-parser",       "qwen25",
+                "--dtype",                  "half",
+                "--gpu-memory-utilization", "0.90",
+                "--max-num-seqs",           "32",
+                "--trust-remote-code",
+            ],
+        )
 
-        # Start vllm in background — load_context returns immediately so the
-        # container initialises fast. predict() waits for _ready before serving.
-        threading.Thread(target=_start, daemon=True).start()
+        # Block until vllm is ready — endpoint reports READY only after this returns.
+        # /v1/models returns 200 only after model weights are fully loaded.
+        for _ in range(120):
+            try:
+                r = _req.get(f"http://localhost:{self._PORT}/v1/models", timeout=5)
+                if r.status_code == 200:
+                    return
+            except Exception:
+                pass
+            time.sleep(10)
+
+        self._proc.kill()
+        raise RuntimeError("vLLM server failed to start within 20 minutes.")
 
     def predict(self, context, messages, params):
-        import time, requests as _req
+        import requests as _req
         from mlflow.types.llm import ChatCompletionResponse
 
         def _dummy():
@@ -152,23 +145,9 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             })
 
-        # load_context was not called at all
-        if not hasattr(self, "_ready"):
+        # _skip_serve=True means no GPU (registration/validation context)
+        if getattr(self, "_skip_serve", True):
             return _dummy()
-
-        # No GPU at registration time — this is MLflow validation, not production
-        if getattr(self, "_skip_serve", False):
-            return _dummy()
-
-        # Wait for vllm serve to be ready (first request only)
-        for _ in range(60):
-            if self._ready:
-                break
-            if self._failed:
-                raise RuntimeError("vLLM server failed to start.")
-            time.sleep(5)
-        else:
-            raise RuntimeError("Timed out waiting for vLLM server.")
 
         msgs = []
         for m in messages:
