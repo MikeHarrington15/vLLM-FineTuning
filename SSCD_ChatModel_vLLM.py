@@ -49,7 +49,7 @@ ENDPOINT_NAME       = "sscd-vllm-chat-v1"
 w          = WorkspaceClient()
 token      = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 headers    = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-invoke_url = f"{w.config.host}/serving-endpoints/{ENDPOINT_NAME}/v1"
+invoke_url = f"{w.config.host}/serving-endpoints"
 
 print(f"Workspace : {w.config.host}")
 print(f"Model path: {UC_VOLUME_MODEL_PATH}")
