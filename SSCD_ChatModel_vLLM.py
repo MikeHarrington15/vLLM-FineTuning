@@ -114,7 +114,7 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
                     "--host",                   "0.0.0.0",
                     "--port",                   str(self._PORT),
                     "--enable-auto-tool-choice",
-                    "--tool-call-parser",       "hermes",
+                    "--tool-call-parser",       "qwen25",
                     "--dtype",                  "half",
                     "--gpu-memory-utilization", "0.90",
                     "--max-num-seqs",           "32",
@@ -218,7 +218,7 @@ with mlflow.start_run(run_name="sscd_vllm_chat"):
         python_model=VLLMChatModel(),
         artifacts={"model_dir": UC_VOLUME_MODEL_PATH},
         pip_requirements=[
-            "vllm==0.6.3.post1",
+            "vllm==0.8.5.post1",
             "transformers==4.46.0",
             "mlflow>=2.14.1",
         ],
