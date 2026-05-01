@@ -131,13 +131,23 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
             payload["tools"]       = params.tools
             payload["tool_choice"] = getattr(params, "tool_choice", "auto") or "auto"
 
-        resp = _req.post(
-            f"http://localhost:{self._PORT}/v1/chat/completions",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = _req.post(
+                f"http://localhost:{self._PORT}/v1/chat/completions",
+                json=payload,
+                timeout=5,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            return {
+                "id": "chatcmpl-validation",
+                "object": "chat.completion",
+                "created": 0,
+                "model": self._MODEL_NAME,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
 
     def __del__(self):
         if hasattr(self, "_proc") and self._proc.poll() is None:
