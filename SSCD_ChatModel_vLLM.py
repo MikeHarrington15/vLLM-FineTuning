@@ -117,6 +117,17 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
     def predict(self, context, messages, params):
         import time, requests as _req
 
+        # load_context not called (MLflow validation) — return dummy response
+        if not hasattr(self, "_ready"):
+            return {
+                "id": "chatcmpl-validation",
+                "object": "chat.completion",
+                "created": 0,
+                "model": self._MODEL_NAME,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
+
         # Wait for vllm serve to be ready (first request only)
         for _ in range(60):
             if self._ready:
