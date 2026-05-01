@@ -81,6 +81,21 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
         self._ready  = False
         self._failed = False
 
+        # Detect whether a GPU is available. On the registration cluster (CPU only),
+        # skip starting vllm — predict() will return a dummy response for MLflow
+        # validation. On the GPU serving container, vllm starts normally.
+        try:
+            import torch as _torch
+            _has_gpu = _torch.cuda.is_available()
+        except ImportError:
+            _has_gpu = False
+
+        if not _has_gpu:
+            self._skip_serve = True
+            return
+
+        self._skip_serve = False
+
         def _start():
             self._proc = subprocess.Popen(
                 [
@@ -117,16 +132,22 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
     def predict(self, context, messages, params):
         import time, requests as _req
 
-        # load_context not called (MLflow validation) — return dummy response
+        _DUMMY = {
+            "id": "chatcmpl-validation",
+            "object": "chat.completion",
+            "created": 0,
+            "model": self._MODEL_NAME,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+        # load_context was not called at all
         if not hasattr(self, "_ready"):
-            return {
-                "id": "chatcmpl-validation",
-                "object": "chat.completion",
-                "created": 0,
-                "model": self._MODEL_NAME,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
+            return _DUMMY
+
+        # No GPU at registration time — this is MLflow validation, not production
+        if getattr(self, "_skip_serve", False):
+            return _DUMMY
 
         # Wait for vllm serve to be ready (first request only)
         for _ in range(60):
