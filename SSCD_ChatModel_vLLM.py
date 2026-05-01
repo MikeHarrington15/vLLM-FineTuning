@@ -81,16 +81,25 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
         self._ready  = False
         self._failed = False
 
-        # Detect whether a GPU is available. On the registration cluster (CPU only),
-        # skip starting vllm — predict() will return a dummy response for MLflow
-        # validation. On the GPU serving container, vllm starts normally.
-        try:
-            import torch as _torch
-            _has_gpu = _torch.cuda.is_available()
-        except ImportError:
-            _has_gpu = False
+        # Detect GPU using device files (reliable on Linux regardless of torch state).
+        # Falls back to nvidia-smi then torch. On CPU-only registration clusters this
+        # returns False and we skip starting vllm so MLflow validation completes fast.
+        import os as _os, subprocess as _sp
+        def _has_gpu():
+            if _os.path.exists('/dev/nvidiactl'):
+                return True
+            try:
+                return _sp.run(['nvidia-smi'], capture_output=True, timeout=5).returncode == 0
+            except Exception:
+                pass
+            try:
+                import torch as _t
+                return _t.cuda.is_available()
+            except ImportError:
+                pass
+            return False
 
-        if not _has_gpu:
+        if not _has_gpu():
             self._skip_serve = True
             return
 
@@ -131,23 +140,25 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
 
     def predict(self, context, messages, params):
         import time, requests as _req
+        from mlflow.types.llm import ChatCompletionResponse
 
-        _DUMMY = {
-            "id": "chatcmpl-validation",
-            "object": "chat.completion",
-            "created": 0,
-            "model": self._MODEL_NAME,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
+        def _dummy():
+            return ChatCompletionResponse.from_dict({
+                "id": "chatcmpl-validation",
+                "object": "chat.completion",
+                "created": 0,
+                "model": self._MODEL_NAME,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            })
 
         # load_context was not called at all
         if not hasattr(self, "_ready"):
-            return _DUMMY
+            return _dummy()
 
         # No GPU at registration time — this is MLflow validation, not production
         if getattr(self, "_skip_serve", False):
-            return _DUMMY
+            return _dummy()
 
         # Wait for vllm serve to be ready (first request only)
         for _ in range(60):
@@ -178,23 +189,13 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
             payload["tools"]       = params.tools
             payload["tool_choice"] = getattr(params, "tool_choice", "auto") or "auto"
 
-        try:
-            resp = _req.post(
-                f"http://localhost:{self._PORT}/v1/chat/completions",
-                json=payload,
-                timeout=5,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            return {
-                "id": "chatcmpl-validation",
-                "object": "chat.completion",
-                "created": 0,
-                "model": self._MODEL_NAME,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
+        resp = _req.post(
+            f"http://localhost:{self._PORT}/v1/chat/completions",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return ChatCompletionResponse.from_dict(resp.json())
 
     def __del__(self):
         if hasattr(self, "_proc") and self._proc.poll() is None:
