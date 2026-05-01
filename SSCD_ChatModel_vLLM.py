@@ -69,8 +69,6 @@ print(f"Client URL: {invoke_url}")
 
 # COMMAND ----------
 
-from mlflow.types.llm import ChatResponse, ChatChoice, ChatMessage
-
 class VLLMChatModel(mlflow.pyfunc.ChatModel):
     _PORT       = 8000
     _MODEL_NAME = "Qwen2.5-3B-Instruct"
@@ -139,24 +137,7 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
             timeout=120,
         )
         resp.raise_for_status()
-        data = resp.json()
-
-        raw_choice = data["choices"][0]
-        raw_msg    = raw_choice["message"]
-
-        return ChatResponse(
-            choices=[ChatChoice(
-                index=0,
-                message=ChatMessage(
-                    role=raw_msg["role"],
-                    content=raw_msg.get("content"),
-                    tool_calls=raw_msg.get("tool_calls"),
-                ),
-                finish_reason=raw_choice.get("finish_reason", "stop"),
-            )],
-            usage=data.get("usage", {}),
-            model=data.get("model", self._MODEL_NAME),
-        )
+        return resp.json()
 
     def __del__(self):
         if hasattr(self, "_proc") and self._proc.poll() is None:
