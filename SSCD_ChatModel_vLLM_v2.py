@@ -193,7 +193,6 @@ with mlflow.start_run(run_name="sscd_vllm_chat_v2"):
         artifacts={"model_dir": UC_VOLUME_MODEL_PATH},
         pip_requirements=[
             "vllm==0.8.5.post1",
-            "transformers==4.46.0",
             "mlflow>=2.14.1",
         ],
     )
