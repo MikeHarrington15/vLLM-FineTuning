@@ -101,7 +101,6 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
     def predict(self, context, messages, params):
         import re, time
         from mlflow.types.llm import ChatCompletionResponse
-        from vllm import SamplingParams
 
         def _dummy():
             return ChatCompletionResponse.from_dict({
@@ -115,6 +114,8 @@ class VLLMChatModel(mlflow.pyfunc.ChatModel):
 
         if self._llm is None:
             return _dummy()
+
+        from vllm import SamplingParams
 
         msgs    = [{"role": m.role, "content": m.content or ""} for m in messages]
         tools   = getattr(params, "tools",       None)
